@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">warehouseupdater</string>
+
+    <!-- Connection Configuration -->
+    <integer name="CONFIG_TESTSERVER">66</integer>
+    <integer name="CONFIG_LIVESERVER">65</integer>
+    <string name="FTP_HOST">192.168.10.247</string>
+    <string name="FTP_HOST_EXTERNAL">properuk.net</string>
+    <string name="FTP_DEFAULTUSER">TelfordHand</string>
+    <string name="FTP_PASSWORD">H4ndH3lds%r</string>
+
+    <!--    Security    -->
+    <string name="ssid">\"Mercury\"</string>
+    <string name="password">\"God0fC0mm5\"</string>
+
+    <!--   Purchased Devices  -->
+    <string name="SmallDevice">Geofanci</string>
+    <string name="LargeDevice">Alps</string>
+
+    <!--    Authorized Endpoints  -->
+    <string name="ENDPOINT_THE2S">08:bd:43:bb:26:00</string>
+    <string name="ENDPOINT_AMAZONDISPATCH">20:4e:7f:87:61:60</string>
+    <string name="ENDPOINT_BACKSTOCK8">20:4e:7f:87:4d:e0</string>
+    <string name="ENDPOINT_EXPORT">08:bd:43:bb:22:00</string>
+    <!--<string name="ENDPOINT_BACKSTOCK8">20:4e:7f:87:4d:e0</string>-->
+    <!--<string name="ENDPOINT_BACKSTOCK8">20:4e:7f:87:4d:20</string>-->
+    <!--<string name="ENDPOINT_THE4S">20:4e:7f:87:58:00</string>-->
+</resources>
