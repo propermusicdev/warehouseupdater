@@ -3,20 +3,22 @@ package com.proper.warehouseupdater.services;
 /**
  * Created by Lebel on 11/11/2014.
  */
-import android.app.AlertDialog;
-import android.app.Service;
+import android.app.*;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.graphics.BitmapFactory;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
-import android.net.wifi.WifiManager;
 import android.os.*;
+import android.support.v4.app.NotificationCompat;
 import android.util.Log;
+import android.view.WindowManager;
 import android.widget.Toast;
 import com.proper.data.diagnostics.LogEntry;
 import com.proper.logger.LogHelper;
@@ -25,14 +27,11 @@ import com.proper.security.UserLoginResponse;
 import com.proper.utils.DeviceUtils;
 //import com.proper.utils.FileUtils;
 import com.proper.utils.UpdaterFileSorter;
+import com.proper.warehouseupdater.ActMain;
 import com.proper.warehouseupdater.R;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.net.ftp.FTP;
-import org.apache.commons.net.ftp.FTPFile;
 
-import java.beans.PropertyChangeEvent;
-import java.beans.PropertyChangeListener;
-import java.beans.PropertyChangeSupport;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -44,15 +43,14 @@ import java.util.concurrent.TimeUnit;
 public class UpdaterService extends Service {
     private static final String TAG = UpdaterService.class.getSimpleName();
     private static final long interval = 10800000;  //  every 3 hrs     //7200000; // every 2 hours
-    private static final long initialDelay = 3000;//3600000; // 1 hr
+    private static final long initialDelay = 3000;
     private static final int NOTIFY_UPDATE_FOUND = 1;
     private static final int NOTIFY_UPDATE_NOTFOUND = 2;
+    private static final int NOTIFY_ID = 1;
     private IBinder binder = null;
     private Context appContext;
     private HandlerThread mWorkerHandlerThread;
     private Handler handler;
-    private WifiManager mainWifi;
-    private Configurator configurator = null;
     protected int screenSize;
     protected String deviceID = "";
     protected String deviceIMEI = "";
@@ -63,6 +61,27 @@ public class UpdaterService extends Service {
     //protected UserAuthenticator authenticator = null;
     protected UserLoginResponse currentUser = null;
     protected LogHelper logger = new LogHelper();
+    private boolean foundUpdate;
+    //private boolean notified;
+    private static UpdaterService self = null;
+
+    public Boolean getNotified() {
+        //return notified;
+        SharedPreferences prefs = getSharedPreferences(getString(R.string.preference_credentials), MODE_PRIVATE);
+        return prefs.getBoolean("notified", false);
+    }
+
+    public void setNotified(boolean notified) {
+        //this.notified = notified;
+        SharedPreferences prefs = this.getSharedPreferences(getString(R.string.preference_credentials), Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = prefs.edit();
+        editor.putBoolean("notified", notified);
+        editor.commit();
+    }
+
+    public static UpdaterService getServiceObject(){
+        return self;
+    }
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -80,7 +99,6 @@ public class UpdaterService extends Service {
         deviceID = device.getDeviceID();
         deviceIMEI = device.getIMEI();
 
-
         //handle our message
         handler = new Handler() {
             @Override
@@ -89,10 +107,14 @@ public class UpdaterService extends Service {
 
                 switch (msg.what) {
                     case NOTIFY_UPDATE_NOTFOUND:
-                        Toast.makeText(appContext, "Update not available \nYou have the current version", Toast.LENGTH_LONG).show();
+                        //Toast.makeText(appContext, "Update not available \nYou have the current version", Toast.LENGTH_LONG).show();
                         break;
                     case NOTIFY_UPDATE_FOUND:
                         //TODO - Send notification, Toast and prompt to the target device compelling them = to update
+                        foundUpdate =  true;
+                        if (getNotified() == true) {
+                            notifyToUpdate();
+                        }
                         promptUpdate();
                         break;
                 }
@@ -103,10 +125,9 @@ public class UpdaterService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-//        if (!configurator.isRunning) {
-//            configurator.setRunning(true);
-//        }
+        self = this;
         Log.d(TAG, "onStartCommand");
+        //TODO - Create a notification for updating on demand::: REF::: http://developer.android.com/training/notify-user/display-progress.html
         ScheduledThreadPoolExecutor exec = new ScheduledThreadPoolExecutor(1);
         exec.scheduleWithFixedDelay(new doWorkInBackground(), initialDelay, interval, TimeUnit.MILLISECONDS);
         return START_NOT_STICKY;
@@ -115,10 +136,6 @@ public class UpdaterService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
-//        if (configurator.isRunning) {
-//            configurator.setRunning(false);
-//        }
-        //unregisterReceiver(wifiReceiver);
         mWorkerHandlerThread.quit();
         mWorkerHandlerThread = null;
         handler = null;
@@ -130,7 +147,7 @@ public class UpdaterService extends Service {
         super.onConfigurationChanged(newConfig);
     }
 
-    private ArrayList<PInfo> getInstalledApps(boolean getSysPackages) {
+    private synchronized ArrayList<PInfo> getInstalledApps(boolean getSysPackages) {
         int found = 0;
         ArrayList<PInfo> res = new ArrayList<PInfo>();
         List<PackageInfo> packs = getPackageManager().getInstalledPackages(0);
@@ -154,56 +171,58 @@ public class UpdaterService extends Service {
         return res;
     }
 
-    private void promptUpdate() {
+    private synchronized void promptUpdate() {
         Vibrator vib = (Vibrator) this.getSystemService(Context.VIBRATOR_SERVICE);
         // Vibrate for 500 milliseconds
         vib.vibrate(2000);
         String mMsg = "There is a new version of Warehouse Tools";
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        final AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setMessage(mMsg)
                 .setPositiveButton("Update", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface dialog, int id) {
                         //  TODO - apply some updates, install etc..
-
+                        dialog.dismiss();
                         Intent promptInstall = new Intent(Intent.ACTION_VIEW);
                         promptInstall.setDataAndType(Uri.fromFile(new File(PATH_TO_APK)), "application/vnd.android.package-archive");
                         promptInstall.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                         startActivity(promptInstall);
                     }
                 });
-        builder.show();
+        //builder.show();
+        AlertDialog dialog = builder.create();
+        dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT);
+        dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        dialog.show();
     }
 
-    public class MyPropertyChangeListener implements PropertyChangeListener {
+    private void notifyToUpdate(){
+        String title = "Warehouse Tools";
+        String text = "==>>  Ready to update  ==>>";
+        Intent intent = new Intent(this, ActMain.class);
+        intent.putExtra("PATH", PATH_TO_APK);
+        intent.setAction("Notify");
+        NotificationCompat.Builder builder = initNotificationBuilder(title, text, intent);
+        //Make it personal
+        builder.setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.warehousetools_ic));
+        //notified ++;
+        setNotified(true);
+        //Show notification
+        Notification notification = builder.build();
+        NotificationManager notificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        notification.flags = Notification.FLAG_AUTO_CANCEL;
+        notificationManager.notify(NOTIFY_ID, notification);
+    }
 
-        @Override
-        public void propertyChange(PropertyChangeEvent event) {
-            if (event.getPropertyName().equalsIgnoreCase("isRunning")) {
-                boolean newVal = (Boolean) event.getNewValue();
-                if (newVal) {
-                    Toast.makeText(UpdaterService.this, "WifiReceiver is initialised", Toast.LENGTH_SHORT).show();
-                }
-            }
-//            if (event.getPropertyName().equalsIgnoreCase("endpointElect")) {
-//                ScanResult oldWifi = (ScanResult) event.getOldValue();
-//                ScanResult newWifi = (ScanResult) event.getNewValue();
-//
-//                if (event.getOldValue() != null) {
-//                    if (!oldWifi.BSSID.equalsIgnoreCase(newWifi.BSSID)) {
-//                        Toast.makeText(BinMoveService.this, String.format("Switching to a stronger WIFI\nNow Connected to: %s\nOn channel: %s",
-//                                getEndPointLocation(BinMoveService.this, newWifi.BSSID), getWifiChannel(newWifi.frequency)), Toast.LENGTH_SHORT).show();
-//                        UpdateNotifier updater = new UpdateNotifier(event);
-//                        updater.run();
-//                    }
-//                } else {
-//                    ScanResult wifiValue = (ScanResult) event.getNewValue();
-//                    Toast.makeText(BinMoveService.this, String.format("Switching to a stronger WIFI\nNow Connected to: %s\nOn channel: %s",
-//                            getEndPointLocation(BinMoveService.this, wifiValue.BSSID), getWifiChannel(wifiValue.frequency)), Toast.LENGTH_SHORT).show();
-//                    UpdateNotifier updater = new UpdateNotifier(event);
-//                    updater.run();
-//                }
-//            }
+    private NotificationCompat.Builder initNotificationBuilder(String title, String text, Intent intent){
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this);
+        builder.setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle(title)
+                .setContentText(text);
+        if (intent != null) {
+            PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, 0);
+            builder.setContentIntent(pendingIntent);
         }
+        return builder;
     }
 
     class doWorkInBackground implements Runnable {
@@ -219,10 +238,6 @@ public class UpdaterService extends Service {
             boolean success = false;
 
             try {
-//                if (!mainWifi.isWifiEnabled()) {
-//                    mainWifi.setWifiEnabled(true);
-//                }
-                //Give it some time to work
                 Thread.sleep(3000);
                 String host = res.getString(R.string.FTP_HOST_EXTERNAL);
                 String user = res.getString(R.string.FTP_DEFAULTUSER);
@@ -234,38 +249,32 @@ public class UpdaterService extends Service {
                     ftp.login(user, pass);
                     ftp.setFileType(FTP.BINARY_FILE_TYPE);
                     ftp.setFileTransferMode(FTP.BINARY_FILE_TYPE); //new
+                    ftp.setBufferSize(7000000);
                     ftp.enterLocalPassiveMode();
                 }
                 String updatesDir = "/WarehouseUpdates/";
                 //change directory
                 ftp.changeWorkingDirectory(updatesDir);
-                //get files
-                FTPFile[] files = ftp.listFiles(updatesDir);
-                List<FTPFile> fileList = new ArrayList<FTPFile>();
-                if (files.length > 1) {
-                    for (int i = 0; i < files.length; i ++) {
-                        fileList.add(files[i]);
-                    }
-                    //Sort our list based on signal strength in ascending order
-                    Collections.sort(fileList, sorter);
-                }
-                //get the most recent file
-                FTPFile latestUpdateFile = fileList.get(fileList.size() - 1);
+
+                final String latestUpdatedFile = "warehousetools.apk";
 
                 //TODO - Determine if currently installed version is up-to-date
-
                 List<PInfo> installedProgz = getInstalledApps(false);
-                //Download File and store it in the download directory
-                //File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                 File downloadDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS) + "/warehouseupdates");
                 if (!downloadDir.exists()) {
                     downloadDir.mkdir();
+                }else{
+                    //Clean directory
+                    File[] filez = downloadDir.listFiles();
+                    if (filez.length > 0) {
+                        for(File file: downloadDir.listFiles()) file.delete();
+                    }
                 }
-                String newFileName = FilenameUtils.concat(downloadDir.getAbsolutePath(), latestUpdateFile.getName());
+                String newFileName = FilenameUtils.concat(downloadDir.getAbsolutePath(), latestUpdatedFile);
                 File recentFile = new File(newFileName);
                 OutputStream outputStream = new BufferedOutputStream(new FileOutputStream(recentFile));
-                //success = ftp.retrieveFile(updatesDir + latestUpdateFile.getName(), outputStream);
-                success = ftp.retrieveFile(latestUpdateFile.getName(), outputStream);
+                //success = ftp.retrieveFile(latestUpdateFile.getName(), outputStream);
+                success = ftp.retrieveFile(latestUpdatedFile, outputStream);
                 outputStream.close();
                 //ftp.logout();
                 //ftp.disconnect();
@@ -281,10 +290,9 @@ public class UpdaterService extends Service {
                     // the secret are these two lines....
                     pi.applicationInfo.sourceDir = downloadDir.getAbsolutePath();
                     pi.applicationInfo.publicSourceDir = downloadDir.getAbsolutePath();
-
-                    Drawable APKicon = pi.applicationInfo.loadIcon(pm);
-                    String   AppName = (String)pi.applicationInfo.loadLabel(pm);
-                    String AppVersionName = pi.versionName;
+//                    Drawable APKicon = pi.applicationInfo.loadIcon(pm);
+//                    String   AppName = (String)pi.applicationInfo.loadLabel(pm);
+//                    String AppVersionName = pi.versionName;
                     int AppVersionCode = pi.versionCode;
                     //TODO - Determine if version is higher
                     if (installedProgz.get(0).versionCode < AppVersionCode) {
@@ -298,7 +306,6 @@ public class UpdaterService extends Service {
                 }
                 msg.obj = ret;
                 handler.sendMessage(msg);   //  Notify updater scheduled check status
-
             } catch(Exception ex) {
                 ex.printStackTrace();
                 today = new java.sql.Timestamp(utilDate.getTime());
@@ -314,59 +321,6 @@ public class UpdaterService extends Service {
                     ex.printStackTrace();
                 }
             }
-        }
-    }
-
-    class UpdateNotifier implements Runnable {
-        private PropertyChangeEvent event;
-
-        UpdateNotifier(PropertyChangeEvent event) {
-            this.event = event;
-        }
-
-        @Override
-        public void run() {
-//            ScanResult newWifi = (ScanResult) event.getNewValue();
-//            boolean success = connectToAStrongerWIfi(newWifi);
-//            if (success) {
-//                Toast.makeText(BinMoveService.this, String.format("[[--> Success <--]]\nSwitching to a stronger WIFI\nConnecting to: %s\nOn channel: %s",
-//                        getEndPointLocation(BinMoveService.this, newWifi.BSSID), getWifiChannel(newWifi.frequency)), Toast.LENGTH_LONG).show();
-//            } else {
-//                Toast.makeText(BinMoveService.this, String.format("[[--> Error <--]]\nUnable to connect to: %s\nOn channel: %s",
-//                        getEndPointLocation(BinMoveService.this, newWifi.BSSID), getWifiChannel(newWifi.frequency)), Toast.LENGTH_LONG).show();
-//            }
-        }
-    }
-
-    class Configurator {
-        private PropertyChangeSupport pcs1;
-        private boolean isRunning = false;
-        //private ScanResult endpointElect;
-
-        Configurator(Context context) {
-            this.pcs1 = new PropertyChangeSupport(context);
-        }
-
-        public boolean isRunning() {
-            return isRunning;
-        }
-
-        public void setRunning(boolean isRunning) {
-            this.pcs1.firePropertyChange("isRunning", this.isRunning, isRunning);
-            this.isRunning = isRunning;
-        }
-
-//        public ScanResult getEndpointElect() {
-//            return endpointElect;
-//        }
-//
-//        public void setEndpointElect(ScanResult endpointElect) {
-//            this.pcs1.firePropertyChange("endpointElect", this.endpointElect, endpointElect);
-//            this.endpointElect = endpointElect;
-//        }
-
-        public void addPropertyChangeListener(PropertyChangeListener listener) {
-            this.pcs1.addPropertyChangeListener(listener);
         }
     }
 

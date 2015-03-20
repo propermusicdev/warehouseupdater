@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">warehouseupdater</string>
+    <string name="app_name">Warehouse Updater</string>
+
+    <!--Preference-->
+    <string name="preference_credentials">Preference_WarehouseUpdater</string>
 
     <!-- Connection Configuration -->
     <integer name="CONFIG_TESTSERVER">66</integer>
